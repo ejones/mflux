@@ -29,6 +29,10 @@ class RuntimeConfig:
         return self.config.num_inference_steps
 
     @property
+    def strength(self) -> float:
+        return self.config.strength
+
+    @property
     def precision(self) -> mx.Dtype:
         return self.config.precision
 

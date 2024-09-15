@@ -3,6 +3,8 @@ import os
 import sys
 import time
 
+import PIL.Image
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from mflux.config.model_config import ModelConfig
@@ -25,6 +27,8 @@ def main():
     parser.add_argument('--lora-paths', type=str, nargs='*', default=None, help='Local safetensors for applying LORA from disk')
     parser.add_argument('--lora-scales', type=float, nargs='*', default=None, help='Scaling factor to adjust the impact of LoRA weights on the model. A value of 1.0 applies the LoRA weights as they are.')
     parser.add_argument('--metadata', action='store_true', help='Export image metadata as a JSON file.')
+    parser.add_argument('--image', type=str, help='Path to an input image, for image-to-image')
+    parser.add_argument('--strength', type=float, help='Number between 0 and 1 indicating the extent to transform image for image-to-image', default=0.8)
 
     args = parser.parse_args()
 
@@ -47,11 +51,13 @@ def main():
     image = flux.generate_image(
         seed=int(time.time()) if args.seed is None else args.seed,
         prompt=args.prompt,
+        image=args.image and PIL.Image.open(args.image),
         config=Config(
             num_inference_steps=args.steps,
             height=args.height,
             width=args.width,
             guidance=args.guidance,
+            strength=args.strength,
         )
     )
 

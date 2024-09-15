@@ -1,5 +1,6 @@
 import mlx.core as mx
 from mlx import nn
+import PIL.Image
 from tqdm import tqdm
 
 from mflux.config.config import Config
@@ -68,16 +69,26 @@ class Flux1:
         if weights.quantization_level is not None:
             self._set_model_weights(weights)
 
-    def generate_image(self, seed: int, prompt: str, config: Config = Config()) -> GeneratedImage:
+    def generate_image(
+            self,
+            seed: int,
+            prompt: str,
+            config: Config = Config(),
+            image: PIL.Image.Image | None = None,
+    ) -> GeneratedImage:
         # Create a new runtime config based on the model type and input parameters
         config = RuntimeConfig(config, self.model_config)
-        time_steps = tqdm(range(config.num_inference_steps))
 
         # 1. Create the initial latents
-        latents = mx.random.normal(
+        noise = mx.random.normal(
             shape=[1, (config.height // 16) * (config.width // 16), 64],
             key=mx.random.key(seed)
         )
+        start_step, latents = (
+            self._get_image_start_step_and_latents(image, noise, config) if image
+            else (0, noise)
+        )
+        time_steps = tqdm(range(start_step, config.num_inference_steps))
 
         # 2. Embedd the prompt
         t5_tokens = self.t5_tokenizer.tokenize(prompt)
@@ -138,3 +149,26 @@ class Flux1:
 
     def save_model(self, base_path: str) -> None:
         ModelSaver.save_model(self, self.bits, base_path)
+
+    def _get_image_start_step_and_latents(
+            self,
+            image: PIL.Image.Image,
+            noise: mx.array,
+            config: Config
+    ) -> tuple[int, mx.array]:
+        image_array = ImageUtil.to_array(image)
+        encoded = self.vae.encode(image_array)
+
+        # reshape to latents
+        h = config.height // 16
+        w = config.width // 16
+        img_latents = mx.reshape(encoded, (1, 16, h, 2, w, 2))
+        img_latents = mx.transpose(img_latents, (0, 2, 4, 1, 3, 5))
+        img_latents = mx.reshape(img_latents, (1, h * w, 64))
+
+        start_step = int((1.0 - config.strength) * config.num_inference_steps)
+        sigma = config.sigmas[start_step]
+        print(f'{sigma=}')
+        latents = sigma * noise + (1.0 - sigma) * img_latents
+
+        return start_step, latents
