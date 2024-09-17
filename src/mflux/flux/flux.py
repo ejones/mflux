@@ -75,20 +75,20 @@ class Flux1:
             prompt: str,
             config: Config = Config(),
             image: PIL.Image.Image | None = None,
+            mask: PIL.Image.Image | None = None,
     ) -> GeneratedImage:
         # Create a new runtime config based on the model type and input parameters
         config = RuntimeConfig(config, self.model_config)
+        sigmas = config.image_sigmas if image else config.sigmas
+        sigmas_iter = tqdm(sigmas[:-1])
 
         # 1. Create the initial latents
-        noise = mx.random.normal(
+        init_noise = mx.random.normal(
             shape=[1, (config.height // 16) * (config.width // 16), 64],
             key=mx.random.key(seed)
         )
-        start_step, latents = (
-            self._get_image_start_step_and_latents(image, noise, config) if image
-            else (0, noise)
-        )
-        time_steps = tqdm(range(start_step, config.num_inference_steps))
+        latents, image_latents = self._get_image_latents(image, init_noise, config) if image else (init_noise, init_noise)
+        latent_mask = self._get_latent_mask(mask, config) if mask else None
 
         # 2. Embedd the prompt
         t5_tokens = self.t5_tokenizer.tokenize(prompt)
@@ -96,10 +96,10 @@ class Flux1:
         prompt_embeds = self.t5_text_encoder.forward(t5_tokens)
         pooled_prompt_embeds = self.clip_text_encoder.forward(clip_tokens)
 
-        for t in time_steps:
+        for i, sigma in enumerate(sigmas_iter):
             # 3.t Predict the noise
             noise = self.transformer.predict(
-                t=t,
+                sigma=sigma,
                 prompt_embeds=prompt_embeds,
                 pooled_prompt_embeds=pooled_prompt_embeds,
                 hidden_states=latents,
@@ -107,8 +107,12 @@ class Flux1:
             )
 
             # 4.t Take one denoise step
-            dt = config.sigmas[t + 1] - config.sigmas[t]
+            dt = sigmas[i + 1] - sigma
             latents += noise * dt
+
+            if mask:
+                img_latents_step = Flux1._scale_noise(image_latents, sigmas[i + 1], init_noise)
+                latents = (1 - latent_mask) * img_latents_step + latent_mask * latents
 
             # Evaluate to enable progress tracking
             mx.eval(latents)
@@ -121,11 +125,18 @@ class Flux1:
             seed=seed,
             prompt=prompt,
             quantization=self.bits,
-            generation_time=time_steps.format_dict['elapsed'],
+            generation_time=sigmas_iter.format_dict['elapsed'],
             lora_paths=self.lora_paths,
             lora_scales=self.lora_scales,
             config=config,
         )
+
+    @staticmethod
+    def _pack_latents(latents: mx.array, height: int, width: int) -> mx.array:
+        latents = mx.reshape(latents, (1, 16, height // 16, 2, width // 16, 2))
+        latents = mx.transpose(latents, (0, 2, 4, 1, 3, 5))
+        latents = mx.reshape(latents, (1, (height // 16) * (width // 16), 64))
+        return latents
 
     @staticmethod
     def _unpack_latents(latents: mx.array, height: int, width: int) -> mx.array:
@@ -133,6 +144,18 @@ class Flux1:
         latents = mx.transpose(latents, (0, 3, 1, 4, 2, 5))
         latents = mx.reshape(latents, (1, 16, height // 16 * 2, width // 16 * 2))
         return latents
+
+    @staticmethod
+    def _scale_noise(latents: mx.array, sigma: mx.array, noise: mx.array):
+        return sigma * noise + (1.0 - sigma) * latents
+
+    @staticmethod
+    def _get_latent_mask(mask: PIL.Image.Image, config: Config) -> mx.array:
+        mask = mask.resize((config.width // 16 * 2, config.height // 16 * 2))
+        mask = mask.convert('L')
+        mask_array = ImageUtil.to_array_binary(mask)
+        mask_array = mx.repeat(mask_array, 16, 1)
+        return Flux1._pack_latents(mask_array, config.height, config.width)
 
     @staticmethod
     def from_alias(alias: str, quantize: int | None = None) -> "Flux1":
@@ -150,25 +173,14 @@ class Flux1:
     def save_model(self, base_path: str) -> None:
         ModelSaver.save_model(self, self.bits, base_path)
 
-    def _get_image_start_step_and_latents(
+    def _get_image_latents(
             self,
             image: PIL.Image.Image,
             noise: mx.array,
-            config: Config
-    ) -> tuple[int, mx.array]:
+            config: Config,
+    ) -> mx.array:
         image_array = ImageUtil.to_array(image)
         encoded = self.vae.encode(image_array)
-
-        # reshape to latents
-        h = config.height // 16
-        w = config.width // 16
-        img_latents = mx.reshape(encoded, (1, 16, h, 2, w, 2))
-        img_latents = mx.transpose(img_latents, (0, 2, 4, 1, 3, 5))
-        img_latents = mx.reshape(img_latents, (1, h * w, 64))
-
-        start_step = int((1.0 - config.strength) * config.num_inference_steps)
-        sigma = config.sigmas[start_step]
-        print(f'{sigma=}')
-        latents = sigma * noise + (1.0 - sigma) * img_latents
-
-        return start_step, latents
+        image_latents = Flux1._pack_latents(encoded, config.height, config.width)
+        latents = Flux1._scale_noise(image_latents, config.image_sigmas[0], noise)
+        return latents, image_latents

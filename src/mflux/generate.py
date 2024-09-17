@@ -27,8 +27,9 @@ def main():
     parser.add_argument('--lora-paths', type=str, nargs='*', default=None, help='Local safetensors for applying LORA from disk')
     parser.add_argument('--lora-scales', type=float, nargs='*', default=None, help='Scaling factor to adjust the impact of LoRA weights on the model. A value of 1.0 applies the LoRA weights as they are.')
     parser.add_argument('--metadata', action='store_true', help='Export image metadata as a JSON file.')
-    parser.add_argument('--image', type=str, help='Path to an input image, for image-to-image')
-    parser.add_argument('--strength', type=float, help='Number between 0 and 1 indicating the extent to transform image for image-to-image', default=0.8)
+    parser.add_argument('--image', type=str, help='Path to an input image, for image-to-image/inpainting')
+    parser.add_argument('--mask', type=str, help='Path to a mask image, for inpainting')
+    parser.add_argument('--strength', type=float, help='Number between 0 and 1 indicating the extent to transform image for image-to-image/inpainting', default=0.8)
 
     args = parser.parse_args()
 
@@ -52,6 +53,7 @@ def main():
         seed=int(time.time()) if args.seed is None else args.seed,
         prompt=args.prompt,
         image=args.image and PIL.Image.open(args.image),
+        mask=args.mask and PIL.Image.open(args.mask),
         config=Config(
             num_inference_steps=args.steps,
             height=args.height,

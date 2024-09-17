@@ -12,6 +12,15 @@ class RuntimeConfig:
         self.model_config = model_config
         self.sigmas = self._create_sigmas(config, model_config)
 
+        # REVIEW ??
+        # TODO setting for this
+        if True:
+          start = min(range(len(self.sigmas)), key=lambda i: abs(self.sigmas[i] - config.strength))
+          self.image_sigmas = mx.concatenate([mx.array([config.strength]), self.sigmas[start + 1:]])
+        else:
+          start = int((1.0 - config.strength) * config.num_inference_steps)
+          self.image_sigmas = self.sigmas[start:]
+
     @property
     def height(self) -> int:
         return self.config.height

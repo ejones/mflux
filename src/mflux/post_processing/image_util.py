@@ -63,6 +63,8 @@ class ImageUtil:
     @staticmethod
     def _pil_to_numpy(image: PIL.Image.Image) -> np.ndarray:
         image = np.array(image).astype(np.float32) / 255.0
+        if image.ndim == 2:
+          image = image[..., None]
         images = np.stack([image], axis=0)
         return images
 
@@ -72,6 +74,15 @@ class ImageUtil:
         array = mx.array(image)
         array = mx.transpose(array, (0, 3, 1, 2))
         array = ImageUtil._normalize(array)
+        return array
+
+    @staticmethod
+    def to_array_binary(image: PIL.Image.Image) -> mx.array:
+        image = ImageUtil._pil_to_numpy(image)
+        image[image < 0.5] = 0
+        image[image >= 0.5] = 1
+        array = mx.array(image)
+        array = mx.transpose(array, (0, 3, 1, 2))
         return array
     
     @staticmethod
